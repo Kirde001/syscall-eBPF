@@ -6,11 +6,11 @@ License:        GPL
 Group:          System/Base
 BuildArch:      noarch
 Source0:        %{name}-%{version}.tar.gz
+
 Requires:       python3-module-bcc
 
 %description
-An eBPF-based service that collects syscall data for the 'bash' process
-and stores it in an SQLite database.
+An eBPF-based service.
 
 %package -n alterator-syscall-inspector
 Summary:        Alterator module for Syscall Inspector
@@ -22,7 +22,7 @@ Requires:       alterator
 Alterator module to view data collected by the Syscall Inspector service.
 
 %prep
-%setup -q
+%setup -q -n syscall-eBPF
 
 %build
 
@@ -36,7 +36,6 @@ make install DESTDIR=%{buildroot}
 %files -n alterator-syscall-inspector
 /usr/share/alterator/applications/syscall-inspector.desktop
 /usr/share/applications/syscall-inspector-launcher.desktop
-/usr/share/alterator/backends/syscall-inspector-launcher.backend
 /usr/share/alterator/ui/syscall-inspector/
 /usr/lib/alterator/backend3/syscall-inspector
 

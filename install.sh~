@@ -43,12 +43,12 @@ install_dependencies() {
 }
 
 get_latest_release_url() {
-    info "Поиск последнего релиза на GitHub..."
+    info "Поиск последнего релиза на GitHub..." >&2
     local latest_url
     latest_url=$(curl -s "$API_URL" | jq -r '.tarball_url')
 
     if [ -z "$latest_url" ] || [ "$latest_url" == "null" ]; then
-        error "Не удалось найти URL последнего релиза. Проверьте репозиторий или ваше интернет-соединение."
+        error "Не удалось найти URL последнего релиза. Проверьте репозиторий или ваше интернет-соединение." >&2
     fi
     echo "$latest_url"
 }

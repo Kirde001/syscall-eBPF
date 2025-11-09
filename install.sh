@@ -39,7 +39,7 @@ install_dependencies() {
     apt-get update
 
     info "Установка зависимостей для сборки и работы..."
-    apt-get install -y rpm-build curl jq python3-module-bcc sqlite3
+    apt-get install -y rpm-build curl jq python3-module-bcc sqlite3 rpm-build-python3
 }
 
 get_latest_release_url() {

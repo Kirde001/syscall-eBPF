@@ -22,7 +22,7 @@ Requires:       alterator
 Alterator module to view data collected by the Syscall Inspector service.
 
 %prep
-%setup -q -n syscall-eBPF
+%setup -q -n %{_builddir_name}
 
 %build
 

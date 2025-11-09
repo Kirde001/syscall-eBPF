@@ -67,7 +67,7 @@ setup_builder() {
 
 build_rpms() {
     local release_url=$1
-    local archive_name="source.tar.gz"
+    local archive_name="syscall-inspector-1.0.tar.gz"
 
     info "Загрузка исходного кода с $release_url..."
     curl -L "$release_url" -o "/home/$BUILD_USER/RPM/SOURCES/$archive_name"

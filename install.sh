@@ -79,8 +79,8 @@ build_rpms() {
     su - "$BUILD_USER" -c "cp ~/RPM/BUILD/packaging/syscall-inspector.spec ~/RPM/SPECS/"
 
     info "Запуск сборки RPM... Это может занять некоторое время."
-    local build_dir_name=$(tar -tzvf ~/RPM/SOURCES/syscall-inspector-1.0.tar.gz | head -1 | awk -F/ '{print $1}')
-    su - "$BUILD_USER" -c "rpmbuild -bb ~/RPM/SPECS/syscall-inspector.spec"
+    local build_dir_name=$(su - "$BUILD_USER" -c "tar -tzvf ~/RPM/SOURCES/$archive_name | head -1 | awk -F/ '{print $1}'")
+    su - "$BUILD_USER" -c "rpmbuild -bb --define '_builddir_name $build_dir_name' ~/RPM/SPECS/syscall-inspector.spec"
 }
 
 install_rpms() {

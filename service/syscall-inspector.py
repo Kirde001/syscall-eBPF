@@ -107,7 +107,7 @@ class SyscallDaemon:
         self.init_db()
         filter_check_c = self.get_filter_code()
         final_bpf_program = bpf_program_template.format(filter_check=filter_check_c)
-
+        print(f"Загрузка eBPF с фильтром: {filter_check_c}", file=sys.stderr)
         try:
             self.bpf = BPF(text=final_bpf_program)
         except Exception as e:

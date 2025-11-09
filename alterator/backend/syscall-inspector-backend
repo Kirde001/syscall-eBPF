@@ -30,10 +30,11 @@ write_filter()
 {
     local new_filter=$(read_string_param filter_value)
     
+    # Очистка (оставляем ее для безопасности)
     new_filter=$(echo "$new_filter" | tr -cd '[:alnum:]_.-' | cut -c 1-15)
     
     if [ -z "$new_filter" ]; then
-        new_filter="*" # Если строка пустая, ставим "*" (все)
+        new_filter="*"
     fi
     
     echo "$new_filter" > "$FILTER_PATH"
@@ -42,6 +43,18 @@ write_filter()
     
     write_string_param status "success"
     write_string_param new_filter "$new_filter"
+}
+
+get_processes()
+{
+    write_string_param name "*"
+    write_string_param label " (Отслеживать все)"
+    
+    ps -eo comm --no-headers | sort -u | while read proc;
+    do
+        write_string_param name "$proc"
+        write_string_param label "$proc"
+    done
 }
 
 
@@ -56,6 +69,9 @@ on_message()
             ;;
         "write_filter")
             write_filter
+            ;;
+        "get_processes") 
+            get_processes
             ;;
         *)
             read_data

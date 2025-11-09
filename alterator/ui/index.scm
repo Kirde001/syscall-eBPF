@@ -7,7 +7,9 @@
  
  (hbox
   (label text "Отслеживать процесс (comm): ")
-  (textbox name "filter_input" text "*") 
+  
+  (combobox name "filter_input" text "*" (on-get-value (form-value "filter_input")))
+  
   (button name "save_filter_button" text "Применить")
  )
  (label name "filter_status" text " ")
@@ -16,6 +18,7 @@
  (textbox name "data_display" height 400)
 
  (label text " ")
+ (button name "update_button" text "Обновить данные из БД")
  )
 
 (document:root

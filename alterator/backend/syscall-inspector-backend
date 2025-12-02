@@ -4,9 +4,7 @@ export PATH=/usr/bin:/usr/sbin:/bin:/sbin
 alterator_api_version=1
 . alterator-sh-functions
 
-if [ -f /usr/share/alterator/build/alterator-sh-functions ]; then
-    . /usr/share/alterator/build/alterator-sh-functions
-elif [ -f /usr/lib/alterator/sh/alterator-sh-functions ]; then
+if [ -f /usr/lib/alterator/sh/alterator-sh-functions ]; then
     . /usr/lib/alterator/sh/alterator-sh-functions
 else
     . alterator-sh-functions 2>/dev/null || exit 1

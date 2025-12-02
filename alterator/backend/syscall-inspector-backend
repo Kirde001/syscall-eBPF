@@ -2,6 +2,7 @@
 
 export PATH=/usr/bin:/usr/sbin:/bin:/sbin
 alterator_api_version=1
+. alterator-sh-functions
 
 if [ -f /usr/share/alterator/build/alterator-sh-functions ]; then
     . /usr/share/alterator/build/alterator-sh-functions

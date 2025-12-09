@@ -39,7 +39,7 @@
   (listbox 
     name "data_table"
     columns 6
-    header (vector "Время" "Важность" "Тип события" "Пользователь" "Процесс" "Детали")
+    header (vector "Время" "Уровень важности" "Тип события" "Пользователь" "Процесс" "Детали")
     row '#((time . "") (severity . "") (type . "") (username . "") (process . "") (details . ""))
     enumref "/sysmon"
   )

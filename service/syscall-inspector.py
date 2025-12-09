@@ -5,217 +5,201 @@ import sqlite3
 import signal
 import sys
 import os
-import time
 import syslog
+import configparser
+from datetime import datetime
 from bcc import BPF
 
+# Пути
 DB_PATH = "/var/lib/syscall-inspector/data.db"
 DB_DIR = os.path.dirname(DB_PATH)
-FILTER_PATH = "/var/lib/syscall-inspector/filter.conf"
+CONFIG_PATH = "/etc/syscall-inspector/config.conf"
 
-SYSCALL_MAP = {
-    0: "read", 1: "write", 2: "open", 3: "close", 4: "stat", 5: "fstat", 
-    6: "lstat", 7: "poll", 8: "lseek", 9: "mmap", 10: "mprotect", 
-    11: "munmap", 12: "brk", 13: "rt_sigaction", 14: "rt_sigprocmask", 
-    16: "ioctl", 17: "pread64", 18: "pwrite64", 19: "readv", 20: "writev", 
-    21: "access", 22: "pipe", 23: "select", 24: "sched_yield", 
-    39: "getpid", 41: "socket", 42: "connect", 43: "accept", 
-    44: "sendto", 45: "recvfrom", 46: "sendmsg", 47: "recvmsg", 
-    48: "shutdown", 49: "bind", 50: "listen", 56: "clone", 57: "fork", 59: "execve", 
-    61: "wait4", 62: "kill", 72: "fcntl", 78: "getdents", 79: "getcwd", 80: "chdir", 
-    82: "rename", 83: "mkdir", 84: "rmdir", 87: "unlink", 88: "symlink", 89: "readlink",
-    90: "chmod", 91: "fchmod", 92: "chown", 93: "fchown", 95: "umask", 
-    102: "getuid", 104: "getgid", 107: "geteuid", 108: "getegid", 
-    217: "getdents64", 231: "exit_group", 257: "openat", 
-    254: "epoll_ctl", 262: "newfstatat", 
-    270: "pselect6", 271: "ppoll", 281: "epoll_pwait", 302: "renameat2", 334: "rseq"
-}
-
-SIEM_INTERESTING_SYSCALLS = [
-    "execve",
-    "connect",
-    "accept",
-    "bind",
-    "ptrace",
-    "chmod", "fchmod",
-    "chown", "fchown",
-    "unlink",
-    "rename", "renameat2",
-    "mkdir", "rmdir",
-    "symlink"
-]
-
-bpf_program_template = """
+# Улучшенная eBPF программа с получением PPID
+bpf_program = """
 #include <linux/sched.h>
 
-struct data_t {{
+struct data_t {
     u32 pid;
+    u32 ppid;  // Добавили Parent PID
+    u32 uid;
+    u32 type;
     char comm[TASK_COMM_LEN];
-    unsigned long syscall_nr;
-}};
+    char pcomm[TASK_COMM_LEN]; // Имя родителя
+    char fname[256];
+};
 
 BPF_PERF_OUTPUT(events);
 
-TRACEPOINT_PROBE(raw_syscalls, sys_enter) {{
-    struct data_t data = {{}};
-    char comm[TASK_COMM_LEN]; 
-    bpf_get_current_comm(&comm, sizeof(comm));
+// Вспомогательная функция для заполнения данных
+static void fill_data(struct data_t *data, u32 type) {
+    struct task_struct *task;
+    struct task_struct *parent;
 
-    {filter_check}
+    task = (struct task_struct *)bpf_get_current_task();
+    parent = task->real_parent;
 
-    data.pid = bpf_get_current_pid_tgid() >> 32;
-    __builtin_memcpy(data.comm, comm, TASK_COMM_LEN); 
-    data.syscall_nr = args->id;
+    data->pid = bpf_get_current_pid_tgid() >> 32;
+    data->uid = bpf_get_current_uid_gid();
+    data->ppid = parent->pid; // Берем PID родителя из ядра
+    data->type = type;
+    
+    bpf_get_current_comm(&data->comm, sizeof(data->comm));
+    bpf_probe_read_kernel(&data->pcomm, sizeof(data->pcomm), parent->comm); // Имя родителя
+}
 
+TRACEPOINT_PROBE(syscalls, sys_enter_execve) {
+    struct data_t data = {};
+    fill_data(&data, 1);
+    bpf_probe_read_user(data.fname, sizeof(data.fname), args->filename);
     events.perf_submit(args, &data, sizeof(data));
     return 0;
-}}
+}
+
+TRACEPOINT_PROBE(syscalls, sys_enter_openat) {
+    struct data_t data = {};
+    fill_data(&data, 2);
+    bpf_probe_read_user(data.fname, sizeof(data.fname), args->filename);
+
+    // Первичный фильтр в ядре: только /etc/
+    if (data.fname[0] == '/' && data.fname[1] == 'e' && 
+        data.fname[2] == 't' && data.fname[3] == 'c') {
+        events.perf_submit(args, &data, sizeof(data));
+    }
+    return 0;
+}
 """
 
 class SyscallDaemon:
-    def __init__(self, db_path):
-        self.db_path = db_path
+    def __init__(self):
+        self.running = True
         self.conn = None
         self.bpf = None
-        self.buffer = {} 
-        self.last_flush = time.time()
-        self.running = True
+        self.wazuh_enabled = False
+        self.my_pid = os.getpid()  # Запоминаем свой PID
         
-        syslog.openlog(ident="syscall-ebpf", logoption=syslog.LOG_PID, facility=syslog.LOG_AUTHPRIV)
-        
+        # Черный список процессов (шум)
+        self.ignore_comms = {
+            "syscall-inspect", "python3", "wazuh-agent", 
+            "filebeat", "systemd", "auditd", "sqlite3"
+        }
+
+        syslog.openlog(ident="syscall-ebpf", logoption=syslog.LOG_PID, facility=syslog.LOG_USER)
         signal.signal(signal.SIGINT, self.signal_handler)
         signal.signal(signal.SIGTERM, self.signal_handler)
 
     def signal_handler(self, sig, frame):
         self.running = False
-        self.flush_buffer()
-        self.stop()
-        sys.exit(0)
 
-    def init_db(self):
+    def load_config(self):
+        try:
+            config = configparser.ConfigParser()
+            if os.path.exists(CONFIG_PATH):
+                config.read(CONFIG_PATH)
+                if 'General' in config and 'wazuh_enabled' in config['General']:
+                    self.wazuh_enabled = config['General'].getboolean('wazuh_enabled')
+        except Exception:
+            self.wazuh_enabled = False
+
+    def init_storage(self):
         try:
             os.makedirs(DB_DIR, exist_ok=True)
-            self.conn = sqlite3.connect(self.db_path, timeout=5)
-            os.chmod(self.db_path, 0o644)
+            self.conn = sqlite3.connect(DB_PATH, timeout=5)
+            os.chmod(DB_PATH, 0o644)
             cursor = self.conn.cursor()
             cursor.execute("PRAGMA journal_mode=WAL;")
             cursor.execute('''
-                CREATE TABLE IF NOT EXISTS syscalls (
+                CREATE TABLE IF NOT EXISTS alerts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    severity TEXT,
+                    event_type TEXT,
+                    process TEXT,
                     pid INTEGER,
-                    comm TEXT,
-                    syscall_name TEXT, 
-                    count INTEGER DEFAULT 1
+                    details TEXT
                 )
             ''')
             self.conn.commit()
-        except Exception as e:
-            print(f"Ошибка инициализации БД: {e}", file=sys.stderr)
+            config_dir = os.path.dirname(CONFIG_PATH)
+            os.makedirs(config_dir, exist_ok=True)
+        except Exception:
             sys.exit(1)
 
-    def get_watched_processes(self):
-        watched = set()
-        if os.path.exists(FILTER_PATH):
-            try:
-                with open(FILTER_PATH, 'r') as f:
-                    for line in f:
-                        proc = line.strip()
-                        proc = "".join(x for x in proc if x.isalnum() or x in "._-")
-                        if proc:
-                            watched.add(proc)
-            except:
-                pass
-        return watched
+    def log_event(self, severity, event_type, process, pid, ppid, pcomm, details):
+        timestamp = datetime.now().isoformat()
+        
+        # Обогащаем детали информацией о родителе (как в Sysmon)
+        enriched_details = f"{details} [Parent: {pcomm} ({ppid})]"
+
+        if self.wazuh_enabled:
+            priority = syslog.LOG_INFO
+            if severity == "high": priority = syslog.LOG_ALERT
+            elif severity == "medium": priority = syslog.LOG_WARNING
+            
+            # Пишем в Syslog
+            msg = f"WAZUH_EVENT: {event_type} | PROCESS: {process} | PID: {pid} | PPID: {ppid} | DETAILS: {details}"
+            syslog.syslog(priority, msg)
+
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "INSERT INTO alerts (timestamp, severity, event_type, process, pid, details) VALUES (?, ?, ?, ?, ?, ?)",
+                (timestamp, severity, event_type, process, pid, enriched_details)
+            )
+            self.conn.commit()
+        except Exception:
+            pass
 
     def process_event(self, cpu, data, size):
-        if not self.running:
-            return
-            
         event = self.bpf["events"].event(data)
-        nr = event.syscall_nr
-        name = SYSCALL_MAP.get(nr, str(nr))
         
-        key = (event.pid, event.comm.decode('utf-8', 'replace'), name)
+        # === ГЛАВНЫЙ ФИЛЬТР (Python уровень) ===
         
-        if key in self.buffer:
-            self.buffer[key] += 1
-        else:
-            self.buffer[key] = 1
-
-        if time.time() - self.last_flush > 1.0:
-            self.flush_buffer()
-
-    def flush_buffer(self):
-        if not self.buffer:
+        # 1. Игнорируем самих себя и свои дочерние процессы
+        if event.pid == self.my_pid or event.ppid == self.my_pid:
             return
 
-        watched_procs = self.get_watched_processes()
-
-        try:
-            if not self.conn:
-                self.conn = sqlite3.connect(self.db_path, timeout=5)
-
-            cursor = self.conn.cursor()
+        # 2. Игнорируем шумные процессы по имени
+        comm = event.comm.decode('utf-8', 'replace').strip()
+        if comm in self.ignore_comms:
+            return
             
-            for (pid, comm, name), count in self.buffer.items():
-                cursor.execute(
-                    "INSERT INTO syscalls (pid, comm, syscall_name, count) VALUES (?, ?, ?, ?)",
-                    (pid, comm, name, count)
-                )
-
-                if comm in watched_procs:
-                    if name in SIEM_INTERESTING_SYSCALLS:
-                        priority = syslog.LOG_NOTICE
-                        if name in ["execve", "ptrace", "renameat2"]:
-                            priority = syslog.LOG_WARNING
-                        
-                        msg = f"SIEM_EVENT: Process '{comm}' (PID {pid}) called '{name}' {count} times"
-                        syslog.syslog(priority, msg)
-
-            self.conn.commit()
-            self.buffer.clear()
-            self.last_flush = time.time()
+        # 3. Дополнительные проверки (можно расширять)
+        fname = event.fname.decode('utf-8', 'replace')
+        pcomm = event.pcomm.decode('utf-8', 'replace')
+        
+        # Логика типов
+        if event.type == 1: # Execve
+            self.log_event("medium", "process_execution", comm, event.pid, event.ppid, pcomm, f"Запуск команды: {fname}")
             
-        except sqlite3.ProgrammingError:
-            pass
-        except Exception as e:
-            if "closed" not in str(e).lower():
-                print(f"Ошибка записи: {e}", file=sys.stderr)
+        elif event.type == 2: # Openat
+            # Игнорируем доступ к шумным файлам (например, ld.so.cache)
+            if "ld.so.cache" in fname or "nsswitch.conf" in fname:
+                return
+                
+            self.log_event("high", "sensitive_file_access", comm, event.pid, event.ppid, pcomm, f"Доступ к файлу: {fname}")
 
     def run(self):
-        self.init_db()
-        bpf_text = bpf_program_template.format(filter_check="")
+        self.init_storage()
+        self.load_config()
         
         try:
-            self.bpf = BPF(text=bpf_text)
-        except Exception as e:
-            print(f"Ошибка загрузки eBPF: {e}", file=sys.stderr)
+            self.bpf = BPF(text=bpf_program)
+        except Exception:
             sys.exit(1)
-            
+
         self.bpf["events"].open_perf_buffer(self.process_event)
-        print("Service started. Strict SIEM mode active.", file=sys.stderr)
         
         while self.running:
             try:
-                self.bpf.perf_buffer_poll(timeout=500)
-                if time.time() - self.last_flush > 1.0:
-                    self.flush_buffer()
+                self.bpf.perf_buffer_poll(timeout=1000)
             except KeyboardInterrupt:
                 break
             except Exception:
                 pass
         
-        self.stop()
-
-    def stop(self):
-        self.running = False
         if self.conn:
-            try:
-                self.conn.close()
-            except:
-                pass
-            self.conn = None
+            self.conn.close()
 
 if __name__ == "__main__":
-    SyscallDaemon(DB_PATH).run()
+    SyscallDaemon().run()

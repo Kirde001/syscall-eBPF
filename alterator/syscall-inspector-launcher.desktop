@@ -2,10 +2,10 @@
 Type=Application
 Categories=X-Alterator-System
 Icon=utilities-terminal
-Name=Syscall Inspector
-Name[ru]=Инспектор Syscall
-Comment=View syscalls from the SQLite database
-Comment[ru]=Просмотр системных вызовов из базы данных SQLite
+Name=System monitoring
+Name[ru]=Системный мониторинг
+Comment=eBPF Security Monitor
+Comment[ru]=Мониторинг системных вызовов и угроз безопасности
 Exec=acc-legacy /syscall-inspector
 [X-Alterator]
 Interface=org.altlinux.alterator.syscall_inspector

@@ -4,87 +4,58 @@ export PATH=/usr/bin:/usr/sbin:/bin:/sbin
 alterator_api_version=1
 . alterator-sh-functions
 
-if [ -f /usr/lib/alterator/sh/alterator-sh-functions ]; then
-    . /usr/lib/alterator/sh/alterator-sh-functions
-else
-    . alterator-sh-functions 2>/dev/null || exit 1
-fi
-
 DB_PATH="/var/lib/syscall-inspector/data.db"
-FILTER_PATH="/var/lib/syscall-inspector/filter.conf"
-
-get_current_filter() {
-    if [ -f "$FILTER_PATH" ]; then
-        head -n 1 "$FILTER_PATH" 2>/dev/null
-    else
-        echo "*"
-    fi
-}
-
-get_filter_list_str() {
-    if [ -s "$FILTER_PATH" ]; then
-        tr -d '\r' < "$FILTER_PATH" 2>/dev/null | tr '\n' ', ' | sed 's/,\s*$//'
-    else
-        echo "(Все процессы)"
-    fi
-}
+CONFIG_PATH="/etc/syscall-inspector/config.conf"
 
 list_data() {
-    if [ ! -f "$DB_PATH" ]; then
-        return
-    fi
-
-    local sql_query=""
-    local base_select="SELECT timestamp, pid, comm, syscall_name, count FROM syscalls"
-    local sort_limit="ORDER BY id DESC LIMIT 50"
-
-    if [ ! -s "$FILTER_PATH" ]; then
-        sql_query="$base_select WHERE comm NOT LIKE 'syscall-inspect%' AND comm NOT LIKE 'alteratord%' $sort_limit;"
-    else
-        local conditions
-        conditions=$(tr -d '\r' < "$FILTER_PATH" | awk 'NF { if (out) out = out " OR "; out = out "comm = \047" $1 "\047" } END { print out }')
-        
-        if [ -n "$conditions" ]; then
-             sql_query="$base_select WHERE ($conditions) $sort_limit;"
-        else
-             sql_query="$base_select WHERE comm NOT LIKE 'syscall-inspect%' AND comm NOT LIKE 'alteratord%' $sort_limit;"
-        fi
-    fi
-
-    sqlite3 -separator "|" "$DB_PATH" "$sql_query" 2>/dev/null |
-    while IFS="|" read -r ts pid comm name cnt; do
-        write_table_item time "$ts" pid "$pid" comm "$comm" nr "$name" count "$cnt"
+    if [ ! -f "$DB_PATH" ]; then return; fi
+    sqlite3 -separator "|" "$DB_PATH" \
+    "SELECT timestamp, severity, event_type, process, details FROM alerts ORDER BY id DESC LIMIT 100;" 2>/dev/null |
+    while IFS="|" read -r ts sev type proc det; do
+        write_table_item time "$ts" severity "$sev" type "$type" process "$proc" details "$det"
     done
 }
 
-read_filter_info() {
-    write_string_param filter_list "$(get_filter_list_str)"
+read_wazuh_status() {
+    if [ -f "$CONFIG_PATH" ] && grep -q "wazuh_enabled = true" "$CONFIG_PATH"; then
+        echo "#t"
+    else
+        echo "#f"
+    fi
 }
 
-add_filter() {
-    local new_proc=$(echo "$in_filter_value" | tr -cd '[:alnum:]_.-' | cut -c 1-15)
-    if [ -n "$new_proc" ]; then
-        mkdir -p "$(dirname "$FILTER_PATH")" 2>/dev/null
-        if ! grep -qxF "$new_proc" "$FILTER_PATH" 2>/dev/null; then
-            echo "$new_proc" >> "$FILTER_PATH"
+set_wazuh_status() {
+    local enabled=$1
+    mkdir -p "$(dirname "$CONFIG_PATH")"
+    
+    if [ ! -f "$CONFIG_PATH" ]; then
+        echo "[General]" > "$CONFIG_PATH"
+    fi
+    
+    if grep -q "wazuh_enabled" "$CONFIG_PATH"; then
+        if [ "$enabled" = "#t" ]; then
+            sed -i 's/wazuh_enabled.*/wazuh_enabled = true/' "$CONFIG_PATH"
+        else
+            sed -i 's/wazuh_enabled.*/wazuh_enabled = false/' "$CONFIG_PATH"
+        fi
+    else
+        if [ "$enabled" = "#t" ]; then
+            echo "wazuh_enabled = true" >> "$CONFIG_PATH"
+        else
+            echo "wazuh_enabled = false" >> "$CONFIG_PATH"
         fi
     fi
-    read_filter_info
-}
 
-reset_filter() {
-    : > "$FILTER_PATH" 2>/dev/null
-    read_filter_info
+    systemctl try-restart syscall-inspector.service
 }
 
 on_message() {
     case "$in_action" in
         "list")          list_data ;;
-        "add_filter")    add_filter ;;
-        "reset_filter")  reset_filter ;;
-        "read_filter")   read_filter_info ;;
+        "read_wazuh")    echo "wazuh_state:$(read_wazuh_status)" ;;
+        "set_wazuh")     set_wazuh_status "$in_wazuh_state" ;;
         *)               list_data ;;
     esac
 }
 
-message_loop || exit 0
+message_loop

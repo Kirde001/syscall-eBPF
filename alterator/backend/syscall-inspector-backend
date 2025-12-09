@@ -7,6 +7,15 @@ alterator_api_version=1
 DB_PATH="/var/lib/syscall-inspector/data.db"
 CONFIG_PATH="/etc/syscall-inspector/config.conf"
 
+ensure_config() {
+    if [ ! -f "$CONFIG_PATH" ]; then
+        mkdir -p "$(dirname "$CONFIG_PATH")"
+        echo "[General]" > "$CONFIG_PATH"
+        echo "wazuh_enabled = true" >> "$CONFIG_PATH"
+        echo "log_format = rfc3164" >> "$CONFIG_PATH"
+    fi
+}
+
 list_data() {
     if [ ! -f "$DB_PATH" ]; then return; fi
     sqlite3 -separator "|" "$DB_PATH" \
@@ -16,34 +25,44 @@ list_data() {
     done
 }
 
-read_wazuh_status() {
-    if [ -f "$CONFIG_PATH" ] && grep -q "wazuh_enabled = true" "$CONFIG_PATH"; then
-        echo "#t"
-    else
-        echo "#f"
-    fi
+list_formats() {
+    write_enum_item "rfc3164" "RFC 3164 (Standard)"
+    write_enum_item "cef" "CEF (ArcSight/Enterprise)"
+    write_enum_item "json" "JSON (Wazuh/ELK)"
 }
 
-set_wazuh_status() {
-    local enabled=$1
-    mkdir -p "$(dirname "$CONFIG_PATH")"
+read_config() {
+    ensure_config
     
-    if [ ! -f "$CONFIG_PATH" ]; then
-        echo "[General]" > "$CONFIG_PATH"
-    fi
+    local val
+    val=$(grep "^wazuh_enabled" "$CONFIG_PATH" | cut -d'=' -f2 | tr -d '[:space:]')
     
-    if grep -q "wazuh_enabled" "$CONFIG_PATH"; then
-        if [ "$enabled" = "#t" ]; then
-            sed -i 's/wazuh_enabled.*/wazuh_enabled = true/' "$CONFIG_PATH"
-        else
-            sed -i 's/wazuh_enabled.*/wazuh_enabled = false/' "$CONFIG_PATH"
-        fi
+    if [ "$val" = "true" ]; then
+        write_bool_param wazuh_enabled #t
     else
-        if [ "$enabled" = "#t" ]; then
-            echo "wazuh_enabled = true" >> "$CONFIG_PATH"
-        else
-            echo "wazuh_enabled = false" >> "$CONFIG_PATH"
-        fi
+        write_bool_param wazuh_enabled #f
+    fi
+
+    local fmt
+    fmt=$(grep "^log_format" "$CONFIG_PATH" | cut -d'=' -f2 | tr -d '[:space:]')
+    if [ -z "$fmt" ]; then fmt="rfc3164"; fi
+    
+    write_string_param log_format "$fmt"
+}
+
+write_config() {
+    ensure_config
+    local enabled=$1
+    local format=$2
+    
+    if [ "$enabled" = "#t" ]; then
+        sed -i 's/^wazuh_enabled.*/wazuh_enabled = true/' "$CONFIG_PATH"
+    else
+        sed -i 's/^wazuh_enabled.*/wazuh_enabled = false/' "$CONFIG_PATH"
+    fi
+
+    if [ -n "$format" ]; then
+        sed -i "s/^log_format.*/log_format = $format/" "$CONFIG_PATH"
     fi
 
     systemctl try-restart syscall-inspector.service
@@ -52,8 +71,9 @@ set_wazuh_status() {
 on_message() {
     case "$in_action" in
         "list")          list_data ;;
-        "read_wazuh")    echo "wazuh_state:$(read_wazuh_status)" ;;
-        "set_wazuh")     set_wazuh_status "$in_wazuh_state" ;;
+        "list_formats")  list_formats ;;
+        "read_config")   read_config ;;
+        "save_config")   write_config "$in_wazuh_enabled" "$in_log_format" ;;
         *)               list_data ;;
     esac
 }

@@ -1,0 +1,9 @@
+1) CMD args for procesess
+2) better filter (* n other ideas)
+3) C and Go (go lib exists - +- maybe)
+4) branches - test switch + Sab
+5) file access (rethink logic - is that so ness) if ans yes then restr
+6) alerts logic refactor
+7) SIEM integration? Rethink the method - param is good but .. Meh. Shouda migrate from db mysql to just files
+sch now: python daemon + ebpf => DB => user space (acc) + SIEM logs; or else ebpf => log files => alterator and siems by defiolt (a better option for sure)
+8) GUI n creating rules => maybe (then second scm file for acc...)
